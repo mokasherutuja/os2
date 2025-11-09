@@ -1,88 +1,118 @@
 #include <stdio.h>
-#include <pthread.h>
-#include <semaphore.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
 
-sem_t wrt;                   // Semaphore for writers
-pthread_mutex_t mutex;       // Mutex for readCount
-int readCount = 0;           // Number of readers accessing data
-int data = 0;                // Shared resource
+#define FIFO_PATH "./text"
 
-int numReaders, numWriters, numIterations;
+void countWordsLinesChars(char *sentence, int *wordCount, int *lineCount, int *charCount) {
+    char *token;
+    *wordCount = 0;
+    *lineCount = 1;  // Default 1 line
+    *charCount = strlen(sentence);
 
-void* reader(void* arg) {
-    int id = ((int)arg);
-
-    for (int i = 0; i < numIterations; i++) {
-        pthread_mutex_lock(&mutex);
-        readCount++;
-        if (readCount == 1)
-            sem_wait(&wrt);   // First reader locks writers out
-        pthread_mutex_unlock(&mutex);
-
-        // Critical Section (Reading)
-        printf("Reader %d: Reading data %d\n", id, data);
-        sleep(1);
-
-        pthread_mutex_lock(&mutex);
-        readCount--;
-        if (readCount == 0)
-            sem_post(&wrt);   // Last reader releases writers
-        pthread_mutex_unlock(&mutex);
-
-        sleep(1);
+    token = strtok(sentence, " \n");
+    while (token != NULL) {
+        (*wordCount)++;
+        token = strtok(NULL, " \n");
     }
-    return NULL;
-}
-
-void* writer(void* arg) {
-    int id = ((int)arg);
-
-    for (int i = 0; i < numIterations; i++) {
-        sem_wait(&wrt);   // Wait for access to resource
-
-        // Critical Section (Writing)
-        data++;
-        printf("Writer %d: Writing data %d\n", id, data);
-        sleep(1);
-
-        sem_post(&wrt);   // Release resource
-        sleep(1);
-    }
-    return NULL;
 }
 
 int main() {
-    printf("Enter the number of readers: ");
-    scanf("%d", &numReaders);
-    printf("Enter the number of writers: ");
-    scanf("%d", &numWriters);
-    printf("Enter the number of iterations for each reader/writer: ");
-    scanf("%d", &numIterations);
+    int fd;
+    char buffer[100];
+    ssize_t bytesRead;
 
-    pthread_t readers[numReaders], writers[numWriters];
-    int readerIds[numReaders], writerIds[numWriters];
+    // Create FIFO if not exists
+    mkfifo(FIFO_PATH, 0666);
 
-    sem_init(&wrt, 0, 1);
-    pthread_mutex_init(&mutex, NULL);
-
-    for (int i = 0; i < numReaders; i++) {
-        readerIds[i] = i + 1;
-        pthread_create(&readers[i], NULL, reader, &readerIds[i]);
+    // Open FIFO for reading
+    fd = open(FIFO_PATH, O_RDONLY);
+    if (fd == -1) {
+        perror("Error opening FIFO for reading");
+        return 1;
     }
 
-    for (int i = 0; i < numWriters; i++) {
-        writerIds[i] = i + 1;
-        pthread_create(&writers[i], NULL, writer, &writerIds[i]);
+    while (1) {
+        bytesRead = read(fd, buffer, sizeof(buffer) - 1);
+        if (bytesRead <= 0)
+            break;
+
+        buffer[bytesRead] = '\0';
+
+        if (strcmp(buffer, "exit\n") == 0) {
+            printf("Exiting reader...\n");
+            break;
+        }
+
+        printf("Received: %s", buffer);
+
+        char temp[100];
+        strncpy(temp, buffer, sizeof(temp));
+        temp[sizeof(temp) - 1] = '\0';
+
+        int wordCount, lineCount, charCount;
+        countWordsLinesChars(temp, &wordCount, &lineCount, &charCount);
+
+        printf("Characters: %d\n", charCount);
+        printf("Words: %d\n", wordCount);
+        printf("Lines: %d\n", lineCount);
     }
 
-    for (int i = 0; i < numReaders; i++)
-        pthread_join(readers[i], NULL);
-    for (int i = 0; i < numWriters; i++)
-        pthread_join(writers[i], NULL);
-
-    sem_destroy(&wrt);
-    pthread_mutex_destroy(&mutex);
-
+    close(fd);
     return 0;
 }
+//2 code
+
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+
+#define FIFO_PATH "./text"
+
+int main() {
+    int fd;
+    char buffer[100];
+
+    // Create FIFO if not exists
+    if (mkfifo(FIFO_PATH, 0666) == -1 && errno != EEXIST) {
+        perror("Error creating FIFO");
+        return 1;
+    }
+
+    // Open FIFO for writing
+    fd = open(FIFO_PATH, O_WRONLY);
+    if (fd == -1) {
+        perror("Error opening FIFO for writing");
+        return 1;
+    }
+
+    while (1) {
+        printf("Enter a sentence (or 'exit' to quit): ");
+        if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+            perror("Error reading input");
+            break;
+        }
+
+        // Write to FIFO
+        if (write(fd, buffer, strlen(buffer) + 1) == -1) {
+            perror("Error writing to FIFO");
+            break;
+        }
+
+        // Exit condition
+        if (strcmp(buffer, "exit\n") == 0)
+            break;
+    }
+
+    close(fd);
+    return 0;
+}
+
+   
